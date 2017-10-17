@@ -5,9 +5,15 @@ module Types where
 -- CLaSH-provided hardware stuff
 import CLaSH.Sized.Unsigned (Unsigned)
 
+type Reg = Unsigned 5
+type TopReg = Unsigned 4
+type MidReg = Unsigned 3
+type RegPair = Unsigned 4
 
-data Register = Register (Unsigned 5)
+
+type SmallConstant = Unsigned 6
+type Constant = Unsigned 8
+
+data WideReg = W | X | Y | Z 
 
 data ExpandReg = RAMPX | RAMPY | RAMPZ 
-
-data Word = Word (Unsigned 8)
