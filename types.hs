@@ -14,19 +14,8 @@ import CLaSH.Promoted.Nat.Literals as Nat
 import CLaSH.Signal (Signal, register, sample)
 
 
-data BaseRegister = 
-        R0 
-        | R1 
-        | R2 
-        | R3 
-        | R4
-        | R5 
-        | R6 
-        | R7 deriving Show
+data Register = Register (Unsigned 5)
 
-data ExpandReg = 
-        RAMPX
-        | RAMPY
-        | RAMPZ deriving Show
+data ExpandReg = RAMPX | RAMPY | RAMPZ 
 
 data Word = Word (Unsigned 8)
