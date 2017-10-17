@@ -10,9 +10,10 @@ type TopReg = Unsigned 4
 type MidReg = Unsigned 3
 type RegPair = Unsigned 4
 
+type UCWord = Unsigned 8
 
 type SmallConstant = Unsigned 6
-type Constant = Unsigned 8
+type Constant = UCWord
 
 data WideReg = W | X | Y | Z 
 

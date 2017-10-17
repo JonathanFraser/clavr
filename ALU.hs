@@ -2,12 +2,15 @@
 module ALU where
 
 import Types
+import CLaSH.Sized.Vector 
+import CLaSH.Prelude
 
 data WithCarry = WithCarry | WithoutCarry
 
 
 data UseWide = UseY | UseZ
 data Direction = Load | Store 
+
 
 data Instruction =
     NOP
@@ -30,3 +33,15 @@ data Instruction =
     | ANDI TopReg Constant 
     | TND Reg SmallConstant Direction
 
+
+data State = State {
+    registers :: Vec 32 Word
+    , carry :: Bit
+    , zero :: Bit
+    , neg :: Bit
+    , over :: Bit 
+    , sign :: Bit
+    , half :: Bit
+    , trans :: Bit
+    , inter :: Bit 
+}
