@@ -23,6 +23,22 @@ type Flag = IExpr Bool
 bit7 :: Byte -> Flag
 bit7 x = slice 7 7 x
 
+-- A 16-bit word value built from / split into byte halves.
+type Word16 = IExpr (Unsigned 16)
+
+-- | Pack a high and low byte into a 16-bit word (@256·hi + lo@) — the @·256@ is a
+-- left-shift-by-8 the synthesiser folds into pure wiring (see PLAN_16BIT_PACKING).
+packBytes :: Byte -> Byte -> Word16
+packBytes hi lo = 256 * zeroExtend hi + zeroExtend lo
+
+-- | The low byte of a 16-bit word.
+loByte :: Word16 -> Byte
+loByte = truncateB
+
+-- | The high byte of a 16-bit word.
+hiByte :: Word16 -> Byte
+hiByte w = truncateB (shiftR w 8)
+
 readFlag' :: AVR m pcW => (AVRALU pcW -> CPUFlag) -> m Flag
 readFlag' sel = cpu sel >>= getFlag
 
@@ -337,15 +353,61 @@ adiwEnc pre = do
     bindBits k 4            -- KKKK (bits 3-0)
     return (d, k)
 
-wideImmOp :: AVR m pcW => String -> Op8 -> m ()
-wideImmOp pre f = do
-    (d, k) <- defineInstruction $ adiwEnc pre
-    a <- readRegFileFOffset avrGPR d 24
-    let k8 = zeroExtendC (immediateF k :: IExpr (Unsigned 6)) :: IExpr (Unsigned 8)   -- 6 <= 8
-    writeRegFileFOffset avrGPR d 24 (f a k8)
-    stubArith
+-- | Set C Z N V S (the wide-op flag set); H is /unchanged/ (unlike 'setCZNVSH').
+setCZNVS :: AVR m pcW => Flag -> Flag -> Flag -> Flag -> m ()
+setCZNVS c z n v = do
+    alu <- cpu id
+    setFlag (avrFlagC alu) c; setFlag (avrFlagZ alu) z; setFlag (avrFlagN alu) n
+    setFlag (avrFlagV alu) v; setFlag (avrFlagS alu) (xor n v)
+
+-- | Read the @24 + 2·d@ register pair as a 16-bit word (high byte = @+1@ entry).
+readPair :: AVR m pcW => Field (Unsigned 2) -> m Word16
+readPair d = do
+    lo <- readRegFileFScaled avrGPR d 2 24
+    hi <- readRegFileFScaled avrGPR d 2 25
+    pure (packBytes hi lo)
+
+-- | Write a 16-bit word back to the @24 + 2·d@ register pair.
+writePair :: AVR m pcW => Field (Unsigned 2) -> Word16 -> m ()
+writePair d w = do
+    writeRegFileFScaled avrGPR d 2 24 (loByte w)
+    writeRegFileFScaled avrGPR d 2 25 (hiByte w)
+
+bit15 :: Word16 -> Flag
+bit15 = slice 15 15
+
+-- ADIW Rd+1:Rd, K — 16-bit add of the zero-extended 6-bit immediate to the pair.
+-- C = carry out of bit 15; V = !Rdh7·R15; N = R15; Z = (result == 0); S = N⊕V.
+instrADIW :: AVR m pcW => m ()
+instrADIW = do
+    mnemonic "ADIW"
+    (d, k) <- defineInstruction $ adiwEnc "10010110"
+    pair <- readPair d
+    let s17 = (zeroExtend pair :: IExpr (Unsigned 17))
+              + zeroExtend (immediateF k :: IExpr (Unsigned 6))
+        res = truncateB s17 :: Word16
+        c   = slice 16 16 s17
+        n   = bit15 res
+        v   = inv (bit15 pair) .&. bit15 res
+    z <- isZero res
+    writePair d res
+    setCZNVS c z n v
     pcAdvance
 
-instrADIW, instrSBIW :: AVR m pcW => m ()
-instrADIW = mnemonic "ADIW" >> wideImmOp "10010110" (+)
-instrSBIW = mnemonic "SBIW" >> wideImmOp "10010111" (-)
+-- SBIW Rd+1:Rd, K — 16-bit subtract.  C = borrow (bit 16 of the widened diff);
+-- V = Rdh7·!R15; N = R15; Z = (result == 0); S = N⊕V.
+instrSBIW :: AVR m pcW => m ()
+instrSBIW = do
+    mnemonic "SBIW"
+    (d, k) <- defineInstruction $ adiwEnc "10010111"
+    pair <- readPair d
+    let wdiff = (zeroExtend pair :: IExpr (Unsigned 17))
+                - zeroExtend (immediateF k :: IExpr (Unsigned 6))
+        res = truncateB wdiff :: Word16
+        c   = slice 16 16 wdiff
+        n   = bit15 res
+        v   = bit15 pair .&. inv (bit15 res)
+    z <- isZero res
+    writePair d res
+    setCZNVS c z n v
+    pcAdvance

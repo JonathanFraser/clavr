@@ -235,11 +235,15 @@ instrCALL = do
     pushRetAddr ret
     writeField avrPC (zeroExtend tgt)
 
--- MOVW Rd+1:Rd, Rr+1:Rr — 0000_0001_dddd_rrrr  (stub: copy lo register)
+-- MOVW Rd+1:Rd, Rr+1:Rr — 0000_0001_dddd_rrrr.  d,r select register /pairs/
+-- (actual base = 2·field); copy both bytes, no flags.
 instrMOVW :: AVR m pcW => m ()
 instrMOVW = do
     mnemonic "MOVW"
     (d, r) <- defineInstruction $ do
         fixed "00000001"; d <- field @(Unsigned 4); r <- field @(Unsigned 4); return (d, r)
-    writeRegFileF avrGPR d =<< readRegFileF avrGPR r
+    rlo <- readRegFileFScaled avrGPR r 2 0
+    rhi <- readRegFileFScaled avrGPR r 2 1
+    writeRegFileFScaled avrGPR d 2 0 rlo
+    writeRegFileFScaled avrGPR d 2 1 rhi
     pcAdvance
