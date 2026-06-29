@@ -170,6 +170,38 @@ tests =
         , tcStopNs   = 500
         , tcExpected = [("gpio_port", "0x104"), ("gpio_ddr", "0x255")]
         }
+
+    -- Instruction-coverage: control flow — JMP, CALL/RET, RCALL, ICALL/IJMP,
+    -- RETI, BRBS.  Accumulator reaches 0x44 only if every call returned right.
+    , TestCase
+        { tcName     = "cov_flow"
+        , tcProgBin  = "tests/fixtures/cov_flow.bin"
+        , tcTbVhd    = "tests/ghdl/cov_flow_tb.vhd"
+        , tcStopNs   = 4000
+        , tcExpected = [("gpio_port", "0x68"), ("gpio_ddr", "0x255")]
+        }
+
+    -- Instruction-coverage: carry arithmetic / compares / skips / 16-bit ops —
+    -- ADC, SBC, SBCI, ROR, CP, CPC, CPSE, SBRC, SBRS, ADIW, SBIW.
+    -- Check-and-poison chain ends at 0xA5 only if all results are correct.
+    , TestCase
+        { tcName     = "cov_arith"
+        , tcProgBin  = "tests/fixtures/cov_arith.bin"
+        , tcTbVhd    = "tests/ghdl/cov_arith_tb.vhd"
+        , tcStopNs   = 2500
+        , tcExpected = [("gpio_port", "0x165"), ("gpio_ddr", "0x255")]
+        }
+
+    -- Instruction-coverage: I/O-space + bit ops — IN, OUT, SBI, CBI, SBIC, SBIS
+    -- (via the bit-addressable test GPIO at 0x20), BSET, BCLR, BST, BLD.
+    -- Ends at 0x5A only if every op (incl. SBI/CBI read-modify-write) is correct.
+    , TestCase
+        { tcName     = "cov_io"
+        , tcProgBin  = "tests/fixtures/cov_io.bin"
+        , tcTbVhd    = "tests/ghdl/cov_io_tb.vhd"
+        , tcStopNs   = 2500
+        , tcExpected = [("gpio_port", "0x90"), ("gpio_ddr", "0x255")]
+        }
     ]
 
 -- ---------------------------------------------------------------------------

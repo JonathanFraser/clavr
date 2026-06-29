@@ -71,23 +71,31 @@ avrSocWith romWords = do
     uart0  <- createUart  "uart0"  sigFalse
     timer0 <- createTimer "timer0" sigFalse
     gpio0  <- createGpio  "gpio0"  0
+    -- Bit-addressable test GPIO mapped into the SBI/CBI/SBIC/SBIS I/O window
+    -- (data 0x20–0x22 → I/O 0x00–0x02): its PORT (data 0x22 = I/O 0x02) is the
+    -- only bit-addressable register a program can reach with SBI/CBI/SBIC/SBIS,
+    -- since every real peripheral sits above I/O 0x1F.  Used by the GHDL
+    -- instruction-coverage tests; harmless to the demo (an unused extra port).
+    gpiot  <- createGpio  "gpiot"  0
     ramp0  <- createRamp  "ramp0"  sigTrue   -- advance every cycle (demonstrator)
     ram0   <- createRam   2048 [] "ram0"
 
-    ((uartOut, gpioOut), dataBus) <- createBus "databus" $ do
+    dataBus <- createHarvardCPU @16 @16 @16 "cpu" avrCPUDef avrATmegaISA romWords
+
+    (uartOut, gpioOut, gpiotOut) <- createBus "databus" dataBus $ do
         uartOut'  <- attachPeripheral 0x0040 uart0
         _         <- attachPeripheral 0x0050 timer0
         gpioOut'  <- attachPeripheral 0x0060 gpio0
+        gpiotOut' <- attachPeripheral 0x0020 gpiot
         _         <- attachPeripheral 0x0070 ramp0
         _         <- attachPeripheral 0x0200 ram0
-        return (uartOut', gpioOut')
+        return (uartOut', gpioOut', gpiotOut')
 
     _ <- createSimpleVectorIrq [(uartRxIrq uartOut, 0x000B)]
 
-    createHarvardCPU @16 @16 @16 "cpu" avrCPUDef avrATmegaISA dataBus romWords
-
-    sysOutput "gpio_port" (gpioPort gpioOut)
-    sysOutput "gpio_ddr"  (gpioDdr  gpioOut)
+    sysOutput "gpio_port"  (gpioPort gpioOut)
+    sysOutput "gpio_ddr"   (gpioDdr  gpioOut)
+    sysOutput "gpiot_port" (gpioPort gpiotOut)
 
 -- ---------------------------------------------------------------------------
 -- Main: emit VHDL

@@ -37,6 +37,7 @@ ghdl -a --std=08 --workdir="$WORKDIR" \
     "$OUTDIR/uart0.vhd" \
     "$OUTDIR/timer0.vhd" \
     "$OUTDIR/gpio0.vhd" \
+    "$OUTDIR/gpiot.vhd" \
     "$OUTDIR/ramp0.vhd" \
     "$OUTDIR/ram0.vhd" \
     "$OUTDIR/databus.vhd" \
