@@ -16,6 +16,7 @@ ghdl -a --std=08 \
     "$VHDL/uart0.vhd" \
     "$VHDL/timer0.vhd" \
     "$VHDL/gpio0.vhd" \
+    "$VHDL/gpiot.vhd" \
     "$VHDL/ramp0.vhd" \
     "$VHDL/ram0.vhd" \
     "$VHDL/databus.vhd" \

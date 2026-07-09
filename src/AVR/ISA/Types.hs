@@ -1,15 +1,15 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE KindSignatures #-}
 module AVR.ISA.Types
     ( AVRALU(..)
-    , Sreg(..)
-    , AvrState(..)
+    , AvrCore(..)
     , twoReg
     , immReg
     , avrCPUDef
@@ -18,6 +18,7 @@ module AVR.ISA.Types
     , setFlagHi, setFlagLo
     , stubArith
     , pcAdvance
+    , skipNextIf
     ) where
 
 import Prelude hiding (Word)
@@ -26,7 +27,7 @@ import GHC.Generics (Generic, Rep)
 import Hdl.Bits hiding ((!!), zeroExtend, signExtend, truncateB, bitCoerce, slice)
 import Hdl.Types (HdlType(..), GWidth, genericToBits, genericFromBits)
 import Isacle.ISA
-import Isacle.ISA.Types (CPURegister(..), CPURegFile, RegisterFile)
+import Isacle.ISA.Types (RegisterFile)
 
 -- ---------------------------------------------------------------------------
 -- AVR ALU definition record
@@ -51,56 +52,20 @@ data AVRALU pcW = AVRALU
     , avrFlagI :: CPUFlag
     }
 
--- ---------------------------------------------------------------------------
--- SREG as a bit-map record HdlType
--- The status register's bit layout *is* this record's structure: declaration
--- order is MSB-first, so sI occupies bit 7 … sC bit 0 (the AVR SREG layout).
--- 'flagRec' derives each flag's bit position from it — no separate bit-index
--- declaration (C2/C5).
--- ---------------------------------------------------------------------------
+-- | The raw ALU /core/: the pure scalar storage state, an 'HdlType' record the
+-- synthesiser clocks as one register.  (The register file @GPR@ stays a separate
+-- indexed bank — packing it here would regress its indexed writes to a mux tree.)
+-- The @AVRALU@ handles above are the lens/alias /view/ the ISA interacts with;
+-- each projects into this core or the file (@avrSP@ → @coreSP@, @avrX@ →
+-- @GPR[26:27]@, flags → bits of @coreSREG@).
+data AvrCore (pcW :: Nat) = AvrCore
+    { coreSP   :: Unsigned 16
+    , corePC   :: Unsigned pcW
+    , coreSREG :: Unsigned 8
+    } deriving (Generic)
 
-data Sreg = Sreg
-    { sI :: Bit   -- ^ bit 7 — global interrupt enable
-    , sT :: Bit   -- ^ bit 6 — bit copy / transfer
-    , sH :: Bit   -- ^ bit 5 — half carry
-    , sS :: Bit   -- ^ bit 4 — sign (N xor V)
-    , sV :: Bit   -- ^ bit 3 — two's-complement overflow
-    , sN :: Bit   -- ^ bit 2 — negative
-    , sZ :: Bit   -- ^ bit 1 — zero
-    , sC :: Bit   -- ^ bit 0 — carry
-    } deriving Generic
-
-instance HdlType Sreg where
-    type Width Sreg = GWidth (Rep Sreg)
-    toBits   = genericToBits
-    fromBits = genericFromBits
-
--- ---------------------------------------------------------------------------
--- AVR architectural state as one HdlType record (C1: "core satisfies HdlType")
---
--- The whole core state is a record whose every field is itself an 'HdlType':
--- the register file is a 'Vec' array (H4), the pointers/SP are 'Unsigned',
--- the PC is 'Unsigned pcW' (its width is the field's 'Width' — length-by-default,
--- so no free pcW thread), and SREG is the bit-map record above (C2). Core,
--- registers and bit-maps are the *same* HdlType mechanism, recursively.
---
--- This is the structural view the eventual full reframe builds on; the
--- instruction-access machinery (AVRALU handles) still drives synthesis today.
--- ---------------------------------------------------------------------------
-
-data AvrState pcW = AvrState
-    { gpr  :: Vec 32 (Unsigned 8)   -- ^ R0..R31
-    , sp   :: Unsigned 16           -- ^ stack pointer
-    , x    :: Unsigned 16           -- ^ X pointer (R27:R26)
-    , y    :: Unsigned 16           -- ^ Y pointer (R29:R28)
-    , z    :: Unsigned 16           -- ^ Z pointer (R31:R30)
-    , pc   :: Unsigned pcW          -- ^ program counter (width = field Width)
-    , sreg :: Sreg                  -- ^ status register (bit-map record)
-    } deriving Generic
-
-instance (KnownNat pcW, KnownNat (GWidth (Rep (AvrState pcW))))
-      => HdlType (AvrState pcW) where
-    type Width (AvrState pcW) = GWidth (Rep (AvrState pcW))
+instance (KnownNat pcW, KnownNat (Width (AvrCore pcW))) => HdlType (AvrCore pcW) where
+    type Width (AvrCore pcW) = GWidth (Rep (AvrCore pcW))
     toBits   = genericToBits
     fromBits = genericFromBits
 
@@ -141,9 +106,11 @@ avrCPUDef = do
     gpr'  <- newRegFile "GPR"        -- RegisterFile 32 (Unsigned 8)
     sp'   <- reg "SP"   w16
     pc'   <- reg "PC"   (SNat @pcW)
-    x'    <- reg "X"    w16
-    y'    <- reg "Y"    w16
-    z'    <- reg "Z"    w16
+    -- X/Y/Z are not separate storage: they are 16-bit views over GPR pairs
+    -- (R27:R26, R29:R28, R31:R30), low byte first — so writing R30/R31 updates Z.
+    x'    <- regView "X" gpr' [26, 27]
+    y'    <- regView "Y" gpr' [28, 29]
+    z'    <- regView "Z" gpr' [30, 31]
     sreg' <- reg "SREG" w8
     -- Flags are bits of SREG (MSB-first: I@7 T@6 H@5 S@4 V@3 N@2 Z@1 C@0).
     i <- newFlag "I" (sreg' ! 7)
@@ -154,7 +121,7 @@ avrCPUDef = do
     n <- newFlag "N" (sreg' ! 2)
     z <- newFlag "Z" (sreg' ! 1)
     c <- newFlag "C" (sreg' ! 0)
-    aliasFile gpr' "0x00 + regIndex"
+    aliasFile gpr' 0x00      -- GPR file mapped into data space at 0x00..0x1F
     aliasReg  sp'   0x5D
     aliasReg  sreg' 0x5F
     pure AVRALU
@@ -219,3 +186,15 @@ pcAdvance = do
     pcR <- cpu avrPC
     p   <- readReg pcR
     writeReg pcR (p + 1)
+
+-- | Skip-on-condition: when @cond@ holds, step over the next instruction word
+-- (PC += 2); otherwise advance normally (PC += 1).  Used by the SBRC/SBRS/SBIC/
+-- SBIS/CPSE skip group.  NB: this skips a single instruction word — a two-word
+-- next instruction (LDS/STS/CALL/JMP) would need PC += 3 and is not yet handled.
+skipNextIf :: AVR m pcW => IExpr Bool -> m ()
+skipNextIf cond = do
+    pcR <- cpu avrPC
+    p   <- readReg pcR
+    one <- litC 1
+    two <- litC 2
+    writeReg pcR (ifexp cond (p + two) (p + one))

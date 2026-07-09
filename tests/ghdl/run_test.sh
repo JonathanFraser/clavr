@@ -16,9 +16,10 @@ NAME="$1"
 PROG="$2"
 TB_VHD="$3"
 STOP_NS="$4"
+SYNTH="${5:-avr-soc-synth}"   # which SoC synth executable to run (default: coverage SoC)
 
 if [ -z "$NAME" ] || [ -z "$PROG" ] || [ -z "$TB_VHD" ] || [ -z "$STOP_NS" ]; then
-    echo "Usage: run_test.sh <name> <prog.bin> <testbench.vhd> <stop-time-ns>" >&2
+    echo "Usage: run_test.sh <name> <prog.bin> <testbench.vhd> <stop-time-ns> [synth-exe]" >&2
     exit 1
 fi
 
@@ -27,7 +28,7 @@ OUTDIR="build/${NAME}"
 WORKDIR="${OUTDIR}/ghdl_work"
 
 # 1. Synthesise VHDL with the given program binary
-cabal run avr-soc-synth -- "$PROG" "$OUTDIR"
+cabal run "$SYNTH" -- "$PROG" "$OUTDIR"
 
 mkdir -p "$WORKDIR"
 
@@ -37,9 +38,10 @@ ghdl -a --std=08 --workdir="$WORKDIR" \
     "$OUTDIR/uart0.vhd" \
     "$OUTDIR/timer0.vhd" \
     "$OUTDIR/gpio0.vhd" \
+    "$OUTDIR/gpiot.vhd" \
     "$OUTDIR/ramp0.vhd" \
     "$OUTDIR/ram0.vhd" \
-    "$OUTDIR/databus.vhd" \
+    "$OUTDIR/coderom.vhd" \
     "$OUTDIR/avr_soc.vhd" \
     "$TB_VHD"
 

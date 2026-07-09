@@ -80,6 +80,47 @@ tests =
         , tcExpected = [("gpio_port", "0x170"), ("gpio_ddr", "0x255")]
         }
 
+    -- Z-pointer test: proves Z is a VIEW over R31:R30 (the GPR file). Sets Z via
+    -- ldi r30/r31, ST/LD through Z. Previously impossible (avrZ was separate
+    -- storage). GPIO_PORT = 0xC3 (195 decimal).
+    , TestCase
+        { tcName     = "test_zptr"
+        , tcProgBin  = "tests/fixtures/zptr_test.bin"
+        , tcTbVhd    = "tests/ghdl/zptr_tb.vhd"
+        , tcStopNs   = 1000
+        , tcExpected = [("gpio_port", "0x195"), ("gpio_ddr", "0x255")]
+        }
+
+    -- GPR-in-data-space test: aliasFile maps the register file at 0x00, so a read
+    -- of data address 0x05 returns R5. GPIO_PORT = 0x99 (153 decimal).
+    , TestCase
+        { tcName     = "test_gpralias"
+        , tcProgBin  = "tests/fixtures/gpralias_test.bin"
+        , tcTbVhd    = "tests/ghdl/gpralias_tb.vhd"
+        , tcStopNs   = 1000
+        , tcExpected = [("gpio_port", "0x153"), ("gpio_ddr", "0x255")]
+        }
+
+    -- Multi-byte alias test: SP is 16-bit, aliased at 0x5D, so SPL=0x5D and
+    -- SPH=0x5E (endian-correct). Write SP=0x1234 via SPL/SPH, read SPH = 0x12.
+    , TestCase
+        { tcName     = "test_sph"
+        , tcProgBin  = "tests/fixtures/sph_test.bin"
+        , tcTbVhd    = "tests/ghdl/sph_tb.vhd"
+        , tcStopNs   = 1000
+        , tcExpected = [("gpio_port", "0x18"), ("gpio_ddr", "0x255")]
+        }
+
+    -- GPR file WRITE via data space: sts 0x07 writes R7 (the file is just a block
+    -- of registers; a store in the alias window is another writer). GPIO = 0x7E.
+    , TestCase
+        { tcName     = "test_gprwrite"
+        , tcProgBin  = "tests/fixtures/gprwrite_test.bin"
+        , tcTbVhd    = "tests/ghdl/gprwrite_tb.vhd"
+        , tcStopNs   = 1000
+        , tcExpected = [("gpio_port", "0x126"), ("gpio_ddr", "0x255")]
+        }
+
     -- Branch / subroutine test: RJMP + RCALL/RET + BRNE countdown loop
     -- Accumulates 5+4+3+2+1 = 15 = 0x0F → GPIO_PORT = 15 decimal
     , TestCase
@@ -129,7 +170,57 @@ tests =
         , tcStopNs   = 500
         , tcExpected = [("gpio_port", "0x104"), ("gpio_ddr", "0x255")]
         }
+
+    -- Instruction-coverage: control flow — JMP, CALL/RET, RCALL, ICALL/IJMP,
+    -- RETI, BRBS.  Accumulator reaches 0x44 only if every call returned right.
+    , TestCase
+        { tcName     = "cov_flow"
+        , tcProgBin  = "tests/fixtures/cov_flow.bin"
+        , tcTbVhd    = "tests/ghdl/cov_flow_tb.vhd"
+        , tcStopNs   = 4000
+        , tcExpected = [("gpio_port", "0x68"), ("gpio_ddr", "0x255")]
+        }
+
+    -- Instruction-coverage: carry arithmetic / compares / skips / 16-bit ops —
+    -- ADC, SBC, SBCI, ROR, CP, CPC, CPSE, SBRC, SBRS, ADIW, SBIW.
+    -- Check-and-poison chain ends at 0xA5 only if all results are correct.
+    , TestCase
+        { tcName     = "cov_arith"
+        , tcProgBin  = "tests/fixtures/cov_arith.bin"
+        , tcTbVhd    = "tests/ghdl/cov_arith_tb.vhd"
+        , tcStopNs   = 2500
+        , tcExpected = [("gpio_port", "0x165"), ("gpio_ddr", "0x255")]
+        }
+
+    -- Instruction-coverage: I/O-space + bit ops — IN, OUT, SBI, CBI, SBIC, SBIS
+    -- (via the bit-addressable test GPIO at 0x20), BSET, BCLR, BST, BLD.
+    -- Ends at 0x5A only if every op (incl. SBI/CBI read-modify-write) is correct.
+    , TestCase
+        { tcName     = "cov_io"
+        , tcProgBin  = "tests/fixtures/cov_io.bin"
+        , tcTbVhd    = "tests/ghdl/cov_io_tb.vhd"
+        , tcStopNs   = 2500
+        , tcExpected = [("gpio_port", "0x90"), ("gpio_ddr", "0x255")]
+        }
+
+    -- Interrupt end-to-end (uses the avr-irq-soc-synth SoC): the timer overflow
+    -- drives a createIrq latching controller into the CPU, which vectors to the
+    -- ISR that writes 0x55 to GPIO PORT.  gpio_port = 0x55 proves the IRQ actually
+    -- fired and the CPU vectored; gpio_ddr = 0xFF proves main() ran.
+    , TestCase
+        { tcName     = "test_irq"
+        , tcProgBin  = "tests/fixtures/interrupt_test.bin"
+        , tcTbVhd    = "tests/ghdl/irq_tb.vhd"
+        , tcStopNs   = 12000
+        , tcExpected = [("gpio_port", "0x85"), ("gpio_ddr", "0x255")]
+        }
     ]
+
+-- | Which SoC synth executable a case uses.  All but the interrupt case use the
+-- coverage SoC; @test_irq@ uses the interrupt-demo SoC (timer → createIrq → CPU).
+synthFor :: String -> String
+synthFor "test_irq" = "avr-irq-soc-synth"
+synthFor _          = "avr-soc-synth"
 
 -- ---------------------------------------------------------------------------
 -- Runner
@@ -143,6 +234,7 @@ runTest tc = do
         , tcProgBin tc
         , tcTbVhd tc
         , show (tcStopNs tc)
+        , synthFor (tcName tc)
         ] ""
     let combined = out ++ err
     let failures =

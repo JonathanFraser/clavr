@@ -139,7 +139,7 @@ instrBRBS = do
     one8    <- litC 1
     let masked = shifted .&. one8
     cond    <- isZero =<< isZero masked   -- 1 when flag is set
-    absJumpIfF avrPC cond target
+    writeField avrPC (ifexp cond target p1)   -- taken: target; not-taken: PC+1
 
 instrBRBC :: forall m pcW. AVR m pcW => m ()
 instrBRBC = do
@@ -157,7 +157,7 @@ instrBRBC = do
     one8    <- litC 1
     let masked = shifted .&. one8
     cond    <- isZero masked              -- 1 when flag is clear
-    absJumpIfF avrPC cond target
+    writeField avrPC (ifexp cond target p1)   -- taken: target; not-taken: PC+1
 
 -- Named aliases — kept for documentation; same encodings as BRBS/BRBC with fixed sss bits.
 instrBREQ, instrBRNE :: AVR m pcW => m ()
@@ -235,11 +235,15 @@ instrCALL = do
     pushRetAddr ret
     writeField avrPC (zeroExtend tgt)
 
--- MOVW Rd+1:Rd, Rr+1:Rr — 0000_0001_dddd_rrrr  (stub: copy lo register)
+-- MOVW Rd+1:Rd, Rr+1:Rr — 0000_0001_dddd_rrrr.  d,r select register /pairs/
+-- (actual base = 2·field); copy both bytes, no flags.
 instrMOVW :: AVR m pcW => m ()
 instrMOVW = do
     mnemonic "MOVW"
     (d, r) <- defineInstruction $ do
         fixed "00000001"; d <- field @(Unsigned 4); r <- field @(Unsigned 4); return (d, r)
-    writeRegFileF avrGPR d =<< readRegFileF avrGPR r
+    rlo <- readRegFileFScaled avrGPR r 2 0
+    rhi <- readRegFileFScaled avrGPR r 2 1
+    writeRegFileFScaled avrGPR d 2 0 rlo
+    writeRegFileFScaled avrGPR d 2 1 rhi
     pcAdvance
