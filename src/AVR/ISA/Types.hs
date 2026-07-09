@@ -5,8 +5,11 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE KindSignatures #-}
 module AVR.ISA.Types
     ( AVRALU(..)
+    , AvrCore(..)
     , twoReg
     , immReg
     , avrCPUDef
@@ -19,8 +22,10 @@ module AVR.ISA.Types
     ) where
 
 import Prelude hiding (Word)
+import GHC.Generics (Generic, Rep)
 
 import Hdl.Bits hiding ((!!), zeroExtend, signExtend, truncateB, bitCoerce, slice)
+import Hdl.Types (HdlType(..), GWidth, genericToBits, genericFromBits)
 import Isacle.ISA
 import Isacle.ISA.Types (RegisterFile)
 
@@ -46,6 +51,23 @@ data AVRALU pcW = AVRALU
     , avrFlagT :: CPUFlag
     , avrFlagI :: CPUFlag
     }
+
+-- | The raw ALU /core/: the pure scalar storage state, an 'HdlType' record the
+-- synthesiser clocks as one register.  (The register file @GPR@ stays a separate
+-- indexed bank — packing it here would regress its indexed writes to a mux tree.)
+-- The @AVRALU@ handles above are the lens/alias /view/ the ISA interacts with;
+-- each projects into this core or the file (@avrSP@ → @coreSP@, @avrX@ →
+-- @GPR[26:27]@, flags → bits of @coreSREG@).
+data AvrCore (pcW :: Nat) = AvrCore
+    { coreSP   :: Unsigned 16
+    , corePC   :: Unsigned pcW
+    , coreSREG :: Unsigned 8
+    } deriving (Generic)
+
+instance (KnownNat pcW, KnownNat (Width (AvrCore pcW))) => HdlType (AvrCore pcW) where
+    type Width (AvrCore pcW) = GWidth (Rep (AvrCore pcW))
+    toBits   = genericToBits
+    fromBits = genericFromBits
 
 -- | The common two-register AVR encoding shape @\<6 fixed bits\>rd_dddd_rrrr@:
 -- both Rd and Rr are 5-bit fields split as (high bit) + (low nibble). Returns

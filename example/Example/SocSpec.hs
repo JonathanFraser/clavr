@@ -32,7 +32,7 @@ import Hdl.Emit.Vhdl
 import Isacle.System.SystemDSL
 import Isacle.System.HdlCircuit (GpioPhys(..), UartPhys(..))
 
-import AVR.ISA (avrCPUDef, avrATmegaISA)
+import AVR.ISA (avrChip)
 
 -- ---------------------------------------------------------------------------
 -- Clock domain
@@ -66,11 +66,11 @@ readBin16LE path = do
 -- SoC description (ROM contents passed in at synthesis time)
 -- ---------------------------------------------------------------------------
 
-avrSocWith :: [Integer] -> SysDSL Dom10MHz (Unsigned 8) ()
+avrSocWith :: [Integer] -> SysDSL ()
 avrSocWith romWords = do
     uart0  <- createUart  "uart0"  sigFalse
     timer0 <- createTimer "timer0" sigFalse
-    gpio0  <- createGpio  "gpio0"  0
+    gpio0  <- createGpio  "gpio0"  (0 :: Sig Dom10MHz (Unsigned 8))
     -- Bit-addressable test GPIO mapped into the SBI/CBI/SBIC/SBIS I/O window
     -- (data 0x20–0x22 → I/O 0x00–0x02): its PORT (data 0x22 = I/O 0x02) is the
     -- only bit-addressable register a program can reach with SBI/CBI/SBIC/SBIS,
@@ -80,9 +80,10 @@ avrSocWith romWords = do
     ramp0  <- createRamp  "ramp0"  sigTrue   -- advance every cycle (demonstrator)
     ram0   <- createRam   2048 [] "ram0"
 
-    dataBus <- createHarvardCPU @16 @16 @16 "cpu" avrCPUDef avrATmegaISA romWords
-
-    (uartOut, gpioOut, gpiotOut) <- createBus "databus" dataBus $ do
+    -- Assemble the data bus (peripherals laid out into an address map), then hand
+    -- the resulting peripheral handle to the CPU — the CPU generates the matching
+    -- (SimpleBus) master logic for it.
+    (dataBus, (uartOut, gpioOut, gpiotOut)) <- createBus @SimpleBus "databus" $ do
         uartOut'  <- attachPeripheral 0x0040 uart0
         _         <- attachPeripheral 0x0050 timer0
         gpioOut'  <- attachPeripheral 0x0060 gpio0
@@ -91,7 +92,22 @@ avrSocWith romWords = do
         _         <- attachPeripheral 0x0200 ram0
         return (uartOut', gpioOut', gpiotOut')
 
-    _ <- createSimpleVectorIrq [(uartRxIrq uartOut, 0x000B)]
+    -- The code memory is just a bus too: a combinational 16-bit-word ROM (the AVR
+    -- code space, 2^16 words) assembled into its own bus, handed to the CPU
+    -- alongside the data bus.
+    coderom <- createRom 65536 (RomImage romWords :: RomImage (Unsigned 16)) "coderom"
+    (codeBus, ()) <- createBus @SimpleBus "codebus" $ do
+        _ <- attachPeripheral 0x0 coderom
+        return ()
+
+    -- No live interrupt here: the coverage programs run with interrupts enabled
+    -- at points (SEI), so a firing source would vector them away.  'noIrq' leaves
+    -- the CPU's (exposed) irq inputs dormant.  To wire one, build a driver and
+    -- hand it in instead:  irq <- createIrq enable [(uartRxIrq uartOut, 0x000B)]
+    dormant <- noIrq
+    createHarvardCPU "cpu" avrChip codeBus dataBus dormant
+
+    _ <- pure (uartRxIrq uartOut)   -- keep the UART rxIrq output referenced
 
     sysOutput "gpio_port"  (gpioPort gpioOut)
     sysOutput "gpio_ddr"   (gpioDdr  gpioOut)
@@ -108,6 +124,6 @@ main = do
         outDir  = case args of { (_:o:_) -> o; _ -> "build/avr_soc" }
     romWords <- readBin16LE progBin
     createDirectoryIfMissing True outDir
-    let design = execSystemDSL @Dom10MHz @(Unsigned 8) "avr_soc" (avrSocWith romWords)
+    let design = execSystemDSL "avr_soc" (avrSocWith romWords)
     emitVhdlDesignFiles outDir design
     putStrLn $ "AVR SoC synthesis done — " ++ progBin ++ " → " ++ outDir

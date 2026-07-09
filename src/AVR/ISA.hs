@@ -15,12 +15,12 @@ module AVR.ISA
     , avrATtinyISA
     , avrATmegaISA
     , avrATxmegaISA
+    , avrChip
     ) where
 
 import Prelude hiding (Word)
 import Data.Proxy (Proxy(..))
 import GHC.TypeLits (natVal)
-import Control.Monad (when)
 
 import Hdl.Bits hiding (zeroExtend, signExtend, truncateB, bitCoerce, slice, add, mul, shiftL, shiftR, xor, (.&.), (.|.))
 import Hdl.Types (HdlType)
@@ -83,17 +83,29 @@ avrIrqBody = do
     spR <- cpu avrSP
     pcR <- cpu avrPC
     pc  <- readReg pcR
+    sp  <- readReg spR
+    one <- litC 1
     eight <- litC 8
+    -- AVR stack grows DOWN: push PC byte @k@ (low-first) at @SP-k@, then SP -= n.
+    -- The generic 'push' can't be used twice here — it re-reads SP, which is not
+    -- seen updated within one body, so both writes would collide.  Compute the
+    -- addresses explicitly and write SP once (as LCALL-style pushes do), so RETI
+    -- can recover the interrupted PC.
     lo    <- resizeBits pc
-    push spR lo
-    let hiRaw = shiftR pc eight
-    hi    <- resizeBits hiRaw
-    push spR hi
-    when (fromIntegral (natVal (Proxy @pcW)) > (16 :: Int)) $ do
-        sixteen <- litC 16
-        let topRaw = shiftR pc sixteen
-        tb      <- resizeBits topRaw
-        push spR tb
+    writeMem sp lo                       -- PCL at SP
+    hi    <- resizeBits (shiftR pc eight)
+    let sp1 = sp - one
+    writeMem sp1 hi                      -- PCH at SP-1
+    two   <- litC 2
+    finalSp <- if fromIntegral (natVal (Proxy @pcW)) > (16 :: Int)
+                 then do
+                   sixteen <- litC 16
+                   tb  <- resizeBits (shiftR pc sixteen)
+                   three <- litC 3
+                   writeMem (sp1 - one) tb              -- top byte at SP-2
+                   pure (sp - three)
+                 else pure (sp - two)
+    writeReg spR finalSp
     writeFlag avrFlagI 0
     vec    <- irqVector
     vecPcW <- resizeBits vec
@@ -133,3 +145,10 @@ avrATmegaISA = avrISAWith (avrCoreInstrs ++ avrMulInstrs ++ avrExtInstrs)
 -- | ATxmega / large AVR — 22-bit PC, full instruction set.
 avrATxmegaISA :: (AVR m 22, MonadIRQ m, HdlType (IrqAddr m)) => ISADef m
 avrATxmegaISA = avrISAWith (avrCoreInstrs ++ avrMulInstrs ++ avrExtInstrs)
+
+-- | The ATmega \"chip\": storage core ('avrCPUDef') + ISA ('avrATmegaISA')
+-- bundled, with the widths pinned (8-bit word, 16-bit data address, 16-bit code
+-- words and code address).  Hand this to 'createHarvardCPU' — no @\@core \@width@
+-- type applications needed.
+avrChip :: Chip (AvrCore 16) (AVRALU 16) 8 16 16 16
+avrChip = Chip avrCPUDef avrATmegaISA

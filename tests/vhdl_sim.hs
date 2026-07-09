@@ -202,7 +202,25 @@ tests =
         , tcStopNs   = 2500
         , tcExpected = [("gpio_port", "0x90"), ("gpio_ddr", "0x255")]
         }
+
+    -- Interrupt end-to-end (uses the avr-irq-soc-synth SoC): the timer overflow
+    -- drives a createIrq latching controller into the CPU, which vectors to the
+    -- ISR that writes 0x55 to GPIO PORT.  gpio_port = 0x55 proves the IRQ actually
+    -- fired and the CPU vectored; gpio_ddr = 0xFF proves main() ran.
+    , TestCase
+        { tcName     = "test_irq"
+        , tcProgBin  = "tests/fixtures/interrupt_test.bin"
+        , tcTbVhd    = "tests/ghdl/irq_tb.vhd"
+        , tcStopNs   = 12000
+        , tcExpected = [("gpio_port", "0x85"), ("gpio_ddr", "0x255")]
+        }
     ]
+
+-- | Which SoC synth executable a case uses.  All but the interrupt case use the
+-- coverage SoC; @test_irq@ uses the interrupt-demo SoC (timer → createIrq → CPU).
+synthFor :: String -> String
+synthFor "test_irq" = "avr-irq-soc-synth"
+synthFor _          = "avr-soc-synth"
 
 -- ---------------------------------------------------------------------------
 -- Runner
@@ -216,6 +234,7 @@ runTest tc = do
         , tcProgBin tc
         , tcTbVhd tc
         , show (tcStopNs tc)
+        , synthFor (tcName tc)
         ] ""
     let combined = out ++ err
     let failures =
