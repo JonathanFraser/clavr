@@ -21,6 +21,8 @@ begin
     dut : entity work.avr_soc port map (
         dom10mhz                      => clk,
         rst                           => rst,
+        uart_rx                       => '0',
+        gpio_a_in                     => "00000000",
         uart0_UartPhys_uartTxLine     => open,
         uart0_UartPhys_uartRxIrq      => open,
         uart0_UartPhys_uartTxIrq      => open,
