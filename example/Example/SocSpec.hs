@@ -68,9 +68,13 @@ readBin16LE path = do
 
 avrSocWith :: [Integer] -> SysDSL ()
 avrSocWith romWords = do
-    uart0  <- createUart  "uart0"  sigFalse
+    -- Top-level inputs: UART RX line and GPIO Port A pin inputs.
+    uartRx  <- sysInput "uart_rx"  :: SysDSL (Sig Dom10MHz Bool)
+    gpioAIn <- sysInput "gpio_a_in" :: SysDSL (Sig Dom10MHz (Unsigned 8))
+
+    uart0  <- createUart  "uart0"  uartRx
     timer0 <- createTimer "timer0" sigFalse
-    gpio0  <- createGpio  "gpio0"  (0 :: Sig Dom10MHz (Unsigned 8))
+    gpio0  <- createGpio  "gpio0"  gpioAIn
     -- Bit-addressable test GPIO mapped into the SBI/CBI/SBIC/SBIS I/O window
     -- (data 0x20–0x22 → I/O 0x00–0x02): its PORT (data 0x22 = I/O 0x02) is the
     -- only bit-addressable register a program can reach with SBI/CBI/SBIC/SBIS,

@@ -41,9 +41,11 @@ readBin16LE path = do
 
 avrIrqSoc :: [Integer] -> SysDSL ()
 avrIrqSoc romWords = do
-    uart0  <- createUart  "uart0"  sigFalse
+    uartRx  <- sysInput "uart_rx"  :: SysDSL (Sig Dom10MHz Bool)
+    gpioAIn <- sysInput "gpio_a_in" :: SysDSL (Sig Dom10MHz (Unsigned 8))
+    uart0  <- createUart  "uart0"  uartRx
     timer0 <- createTimer "timer0" sigTrue     -- tick every cycle → overflow at 256
-    gpio0  <- createGpio  "gpio0"  (0 :: Sig Dom10MHz (Unsigned 8))
+    gpio0  <- createGpio  "gpio0"  gpioAIn
     gpiot  <- createGpio  "gpiot"  0
     ramp0  <- createRamp  "ramp0"  sigTrue
     ram0   <- createRam   2048 [] "ram0"
