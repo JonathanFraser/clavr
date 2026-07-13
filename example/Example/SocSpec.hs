@@ -23,14 +23,16 @@ import Prelude
 import System.Environment (getArgs)
 import System.Directory (createDirectoryIfMissing)
 import qualified Data.ByteString as BS
-import Data.Bits (shiftL, (.|.))
+import Data.Bits (shiftL)
+import qualified Data.Bits as B
 
-import Hdl.Types
+import Hdl.Sig
 import Hdl.Net (DomId(..), ClockEdge(..), ResetPolarity(..))
 import Hdl.Prim (Unsigned)
 import Hdl.Emit.Vhdl
 import Isacle.System.SystemDSL
 import Isacle.System.HdlCircuit (GpioPhys(..), UartPhys(..))
+import Isacle.Periph.GPIO (gpio)
 
 import AVR.ISA (avrChip)
 
@@ -56,7 +58,7 @@ readBin16LE path = do
   where
     parseLE []        = []
     parseLE [_]       = []
-    parseLE (lo:hi:t) = ((fromIntegral hi `shiftL` 8) .|. fromIntegral lo)
+    parseLE (lo:hi:t) = ((fromIntegral hi `shiftL` 8) B..|. fromIntegral lo)
                         : parseLE t
     nextPow2 k
         | k <= 1    = 1
@@ -66,15 +68,18 @@ readBin16LE path = do
 -- SoC description (ROM contents passed in at synthesis time)
 -- ---------------------------------------------------------------------------
 
-avrSocWith :: [Integer] -> SysDSL ()
+avrSocWith :: [Integer] -> SysNet ()
 avrSocWith romWords = do
     -- Top-level inputs: UART RX line and GPIO Port A pin inputs.
-    uartRx  <- sysInput "uart_rx"  :: SysDSL (Sig Dom10MHz Bool)
-    gpioAIn <- sysInput "gpio_a_in" :: SysDSL (Sig Dom10MHz (Unsigned 8))
+    uartRx  <- sysInput "uart_rx"  :: SysNet (Sig Dom10MHz Bool)
+    gpioAIn <- sysInput "gpio_a_in" :: SysNet (Sig Dom10MHz (Unsigned 8))
 
     uart0  <- createUart  "uart0"  uartRx
     timer0 <- createTimer "timer0" sigFalse
-    gpio0  <- createGpio  "gpio0"  gpioAIn
+    -- GPIO Port A via the peripheral-object flow: build the object (mkPeripheral),
+    -- instantiate it (fresh deferred bus slave nets + physical outputs), then wire
+    -- it to the bus with 'attachPeripheral''.  gpio_a_in is a real input port.
+    (gpio0Bus, (gpio0Ddr, gpio0Port)) <- instantiate (gpio gpioAIn)
     -- Bit-addressable test GPIO mapped into the SBI/CBI/SBIC/SBIS I/O window
     -- (data 0x20–0x22 → I/O 0x00–0x02): its PORT (data 0x22 = I/O 0x02) is the
     -- only bit-addressable register a program can reach with SBI/CBI/SBIC/SBIS,
@@ -87,20 +92,20 @@ avrSocWith romWords = do
     -- Assemble the data bus (peripherals laid out into an address map), then hand
     -- the resulting peripheral handle to the CPU — the CPU generates the matching
     -- (SimpleBus) master logic for it.
-    (dataBus, (uartOut, gpioOut, gpiotOut)) <- createBus @SimpleBus "databus" $ do
+    (dataBus, (uartOut, gpiotOut)) <- createBus @_ @SimpleBus "databus" $ do
         uartOut'  <- attachPeripheral 0x0040 uart0
         _         <- attachPeripheral 0x0050 timer0
-        gpioOut'  <- attachPeripheral 0x0060 gpio0
+        attachPeripheral' 0x0060 gpio0Bus
         gpiotOut' <- attachPeripheral 0x0020 gpiot
         _         <- attachPeripheral 0x0070 ramp0
         _         <- attachPeripheral 0x0200 ram0
-        return (uartOut', gpioOut', gpiotOut')
+        return (uartOut', gpiotOut')
 
     -- The code memory is just a bus too: a combinational 16-bit-word ROM (the AVR
     -- code space, 2^16 words) assembled into its own bus, handed to the CPU
     -- alongside the data bus.
     coderom <- createRom 65536 (RomImage romWords :: RomImage (Unsigned 16)) "coderom"
-    (codeBus, ()) <- createBus @SimpleBus "codebus" $ do
+    (codeBus, ()) <- createBus @_ @SimpleBus "codebus" $ do
         _ <- attachPeripheral 0x0 coderom
         return ()
 
@@ -113,8 +118,8 @@ avrSocWith romWords = do
 
     _ <- pure (uartRxIrq uartOut)   -- keep the UART rxIrq output referenced
 
-    sysOutput "gpio_port"  (gpioPort gpioOut)
-    sysOutput "gpio_ddr"   (gpioDdr  gpioOut)
+    sysOutput "gpio_port"  gpio0Port
+    sysOutput "gpio_ddr"   gpio0Ddr
     sysOutput "gpiot_port" (gpioPort gpiotOut)
 
 -- ---------------------------------------------------------------------------

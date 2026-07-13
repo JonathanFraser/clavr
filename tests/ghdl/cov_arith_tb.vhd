@@ -29,10 +29,8 @@ begin
         uart0_UartPhys_uartTxIrq      => open,
         timer0_TimerPhys_timerOvfIrq  => open,
         timer0_TimerPhys_timerCmpIrq  => open,
-        gpio0_GpioPhys_gpioPort       => gpio_port,
-        gpio0_GpioPhys_gpioDdr        => gpio_ddr,
-        gpio_port                     => open,
-        gpio_ddr                      => open
+        gpio_port                     => gpio_port,
+        gpio_ddr                      => gpio_ddr
     );
 
     clk <= not clk after 10 ns;

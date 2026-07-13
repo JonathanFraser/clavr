@@ -11,9 +11,10 @@ import Prelude
 import System.Environment (getArgs)
 import System.Directory (createDirectoryIfMissing)
 import qualified Data.ByteString as BS
-import Data.Bits (shiftL, (.|.))
+import Data.Bits (shiftL)
+import qualified Data.Bits as B
 
-import Hdl.Types
+import Hdl.Sig
 import Hdl.Net (DomId(..), ClockEdge(..), ResetPolarity(..))
 import Hdl.Prim (Unsigned)
 import Hdl.Emit.Vhdl
@@ -36,13 +37,13 @@ readBin16LE path = do
   where
     parseLE []        = []
     parseLE [_]       = []
-    parseLE (lo:hi:t) = ((fromIntegral hi `shiftL` 8) .|. fromIntegral lo) : parseLE t
+    parseLE (lo:hi:t) = ((fromIntegral hi `shiftL` 8) B..|. fromIntegral lo) : parseLE t
     nextPow2 k | k <= 1 = 1 | otherwise = 2 * nextPow2 ((k + 1) `div` 2)
 
-avrIrqSoc :: [Integer] -> SysDSL ()
+avrIrqSoc :: [Integer] -> SysNet ()
 avrIrqSoc romWords = do
-    uartRx  <- sysInput "uart_rx"  :: SysDSL (Sig Dom10MHz Bool)
-    gpioAIn <- sysInput "gpio_a_in" :: SysDSL (Sig Dom10MHz (Unsigned 8))
+    uartRx  <- sysInput "uart_rx"  :: SysNet (Sig Dom10MHz Bool)
+    gpioAIn <- sysInput "gpio_a_in" :: SysNet (Sig Dom10MHz (Unsigned 8))
     uart0  <- createUart  "uart0"  uartRx
     timer0 <- createTimer "timer0" sigTrue     -- tick every cycle → overflow at 256
     gpio0  <- createGpio  "gpio0"  gpioAIn
@@ -50,7 +51,7 @@ avrIrqSoc romWords = do
     ramp0  <- createRamp  "ramp0"  sigTrue
     ram0   <- createRam   2048 [] "ram0"
 
-    (dataBus, (timerOut, gpioOut, gpiotOut)) <- createBus @SimpleBus "databus" $ do
+    (dataBus, (timerOut, gpioOut, gpiotOut)) <- createBus @_ @SimpleBus "databus" $ do
         _         <- attachPeripheral 0x0040 uart0
         timerOut' <- attachPeripheral 0x0050 timer0
         gpioOut'  <- attachPeripheral 0x0060 gpio0
@@ -60,7 +61,7 @@ avrIrqSoc romWords = do
         return (timerOut', gpioOut', gpiotOut')
 
     coderom <- createRom 65536 (RomImage romWords :: RomImage (Unsigned 16)) "coderom"
-    (codeBus, ()) <- createBus @SimpleBus "codebus" $ do
+    (codeBus, ()) <- createBus @_ @SimpleBus "codebus" $ do
         _ <- attachPeripheral 0x0 coderom
         return ()
 
