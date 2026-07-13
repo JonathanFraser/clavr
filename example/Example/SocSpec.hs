@@ -85,21 +85,21 @@ avrSocWith romWords = do
     -- only bit-addressable register a program can reach with SBI/CBI/SBIC/SBIS,
     -- since every real peripheral sits above I/O 0x1F.  Used by the GHDL
     -- instruction-coverage tests; harmless to the demo (an unused extra port).
-    gpiot  <- createGpio  "gpiot"  0
+    (gpiotBus, (_, gpiotPort)) <- instantiate (gpio 0)
     ramp0  <- createRamp  "ramp0"  sigTrue   -- advance every cycle (demonstrator)
     ram0   <- createRam   2048 [] "ram0"
 
     -- Assemble the data bus (peripherals laid out into an address map), then hand
     -- the resulting peripheral handle to the CPU — the CPU generates the matching
     -- (SimpleBus) master logic for it.
-    (dataBus, (uartOut, gpiotOut)) <- createBus @_ @SimpleBus "databus" $ do
+    (dataBus, uartOut) <- createBus @_ @SimpleBus "databus" $ do
         uartOut'  <- attachPeripheral 0x0040 uart0
         _         <- attachPeripheral 0x0050 timer0
         attachPeripheral' 0x0060 gpio0Bus
-        gpiotOut' <- attachPeripheral 0x0020 gpiot
+        attachPeripheral' 0x0020 gpiotBus
         _         <- attachPeripheral 0x0070 ramp0
         _         <- attachPeripheral 0x0200 ram0
-        return (uartOut', gpiotOut')
+        return uartOut'
 
     -- The code memory is just a bus too: a combinational 16-bit-word ROM (the AVR
     -- code space, 2^16 words) assembled into its own bus, handed to the CPU
@@ -120,7 +120,7 @@ avrSocWith romWords = do
 
     sysOutput "gpio_port"  gpio0Port
     sysOutput "gpio_ddr"   gpio0Ddr
-    sysOutput "gpiot_port" (gpioPort gpiotOut)
+    sysOutput "gpiot_port" gpiotPort
 
 -- ---------------------------------------------------------------------------
 -- Main: emit VHDL
