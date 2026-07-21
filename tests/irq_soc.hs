@@ -1,4 +1,8 @@
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE DataKinds        #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveGeneric    #-}
+{-# LANGUAGE DeriveAnyClass   #-}
 -- | AVR interrupt-demo SoC — identical peripheral set to the coverage SoC, but
 -- the timer's tick is enabled (so it overflows) and its overflow drives a
 -- 'createIrq' latching interrupt controller into the CPU (vector 0x0020).  Used
@@ -10,43 +14,40 @@ module Main where
 import Prelude
 import System.Environment (getArgs)
 import System.Directory (createDirectoryIfMissing)
-import qualified Data.ByteString as BS
-import Data.Bits (shiftL)
-import qualified Data.Bits as B
+
+import GHC.Generics (Generic)
 
 import Hdl.Sig
 import Hdl.Net (DomId(..), ClockEdge(..), ResetPolarity(..))
+import Hdl.Types (Named)
 import Hdl.Prim (Unsigned)
 import Hdl.Emit.Vhdl
 import Isacle.System.SystemDSL
 import Isacle.System.HdlCircuit (GpioPhys(..), TimerPhys(..))
 
 import AVR.ISA (avrChip)
+import AVR.Program (readAvrProgram)
 
 data Dom10MHz
 instance KnownDom Dom10MHz where
     domId _ = DomId "dom10mhz" 10000000 Rising ActiveHigh "rst"
 
-readBin16LE :: FilePath -> IO [Integer]
-readBin16LE path = do
-    bytes <- BS.unpack <$> BS.readFile path
-    let words16 = parseLE bytes
-        n       = length words16
-        n'      = nextPow2 (max 1 n)
-    return (words16 ++ replicate (n' - n) 0)
-  where
-    parseLE []        = []
-    parseLE [_]       = []
-    parseLE (lo:hi:t) = ((fromIntegral hi `shiftL` 8) B..|. fromIntegral lo) : parseLE t
-    nextPow2 k | k <= 1 = 1 | otherwise = 2 * nextPow2 ((k + 1) `div` 2)
+data AvrIn = AvrIn
+    { uart_rx :: Sig Dom10MHz Bool
+    , gpio_in :: Sig Dom10MHz (Unsigned 8)
+    } deriving (Generic, Named)
 
-avrIrqSoc :: [Integer] -> SysNet ()
-avrIrqSoc romWords = do
-    uartRx  <- sysInput "uart_rx"  :: SysNet (Sig Dom10MHz Bool)
-    gpioAIn <- sysInput "gpio_a_in" :: SysNet (Sig Dom10MHz (Unsigned 8))
+data AvrOut = AvrOut
+    { gpio_port  :: Sig Dom10MHz (Unsigned 8)
+    , gpio_ddr   :: Sig Dom10MHz (Unsigned 8)
+    , gpiot_port :: Sig Dom10MHz (Unsigned 8)
+    } deriving (Generic, Named)
+
+avrIrqSoc :: SysDSL m => [Integer] -> AvrIn -> m AvrOut
+avrIrqSoc romWords AvrIn{ uart_rx = uartRx, gpio_in = gpioIn } = do
     uart0  <- createUart  "uart0"  uartRx
     timer0 <- createTimer "timer0" sigTrue     -- tick every cycle → overflow at 256
-    gpio0  <- createGpio  "gpio0"  gpioAIn
+    gpio  <- createGpio  "gpio"  gpioIn
     gpiot  <- createGpio  "gpiot"  0
     ramp0  <- createRamp  "ramp0"  sigTrue
     ram0   <- createRam   2048 [] "ram0"
@@ -54,7 +55,7 @@ avrIrqSoc romWords = do
     (dataBus, (timerOut, gpioOut, gpiotOut)) <- createBus @_ @SimpleBus "databus" $ do
         _         <- attachPeripheral 0x0040 uart0
         timerOut' <- attachPeripheral 0x0050 timer0
-        gpioOut'  <- attachPeripheral 0x0060 gpio0
+        gpioOut'  <- attachPeripheral 0x0060 gpio
         gpiotOut' <- attachPeripheral 0x0020 gpiot
         _         <- attachPeripheral 0x0070 ramp0
         _         <- attachPeripheral 0x0200 ram0
@@ -70,16 +71,16 @@ avrIrqSoc romWords = do
     irq <- createIrq sigTrue [(timerOvfIrq timerOut, 0x0020)]
     createHarvardCPU "cpu" avrChip codeBus dataBus irq
 
-    sysOutput "gpio_port"  (gpioPort gpioOut)
-    sysOutput "gpio_ddr"   (gpioDdr  gpioOut)
-    sysOutput "gpiot_port" (gpioPort gpiotOut)
+    pure AvrOut { gpio_port  = gpioPort gpioOut
+                , gpio_ddr   = gpioDdr  gpioOut
+                , gpiot_port = gpioPort gpiotOut }
 
 main :: IO ()
 main = do
     args <- getArgs
     let progBin = case args of { (p:_)   -> p; _ -> "tests/fixtures/interrupt_test.bin" }
         outDir  = case args of { (_:o:_) -> o; _ -> "build/avr_irq_soc" }
-    romWords <- readBin16LE progBin
+    romWords <- readAvrProgram progBin
     createDirectoryIfMissing True outDir
     let design = execSystemDSL "avr_soc" (avrIrqSoc romWords)
     emitVhdlDesignFiles outDir design

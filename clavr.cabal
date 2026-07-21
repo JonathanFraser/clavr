@@ -50,6 +50,7 @@ library
   hs-source-dirs: src
   exposed-modules:
     AVR.ISA
+    AVR.Program
     AVR.ISA.Types
     AVR.ISA.Arith
     AVR.ISA.Branch
