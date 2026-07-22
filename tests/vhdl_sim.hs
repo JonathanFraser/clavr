@@ -214,13 +214,27 @@ tests =
         , tcStopNs   = 12000
         , tcExpected = [("gpio_port", "0x85"), ("gpio_ddr", "0x255")]
         }
+
+    -- Wishbone wait-state stall (uses the avr-wb-soc-synth SoC): the data bus is
+    -- a Wishbone (stalling) bus, and a wait-state slave on a nested Wishbone
+    -- sub-bus (bus-to-bus) holds a read for 5 cycles then returns 5.  The program
+    -- LDSes it into a register and drives GPIO PORT.  gpio_port = 5 proves the CPU
+    -- held through the bus stall; a CPU ignoring stall would read the early 0.
+    , TestCase
+        { tcName     = "test_wb_wait"
+        , tcProgBin  = "tests/fixtures/wb_wait.bin"
+        , tcTbVhd    = "tests/ghdl/wb_soc_tb.vhd"
+        , tcStopNs   = 2000
+        , tcExpected = [("gpio_port", "0x5"), ("gpio_ddr", "0x255")]
+        }
     ]
 
 -- | Which SoC synth executable a case uses.  All but the interrupt case use the
 -- coverage SoC; @test_irq@ uses the interrupt-demo SoC (timer → createIrq → CPU).
 synthFor :: String -> String
-synthFor "test_irq" = "avr-irq-soc-synth"
-synthFor _          = "avr-soc-synth"
+synthFor "test_irq"     = "avr-irq-soc-synth"
+synthFor "test_wb_wait" = "avr-wb-soc-synth"
+synthFor _              = "avr-soc-synth"
 
 -- ---------------------------------------------------------------------------
 -- Runner
