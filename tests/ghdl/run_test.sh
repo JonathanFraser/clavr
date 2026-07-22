@@ -27,23 +27,22 @@ TB_ENTITY="$(basename "$TB_VHD" .vhd)"
 OUTDIR="build/${NAME}"
 WORKDIR="${OUTDIR}/ghdl_work"
 
-# 1. Synthesise VHDL with the given program binary
+# 1. Synthesise VHDL with the given program binary.  Clear any stale entities
+#    first so the analyse step sees exactly this design's sub-entities (their set
+#    and names depend on the SoC — e.g. inlined vs. sub-entity peripherals).
+rm -f "$OUTDIR"/*.vhd
 cabal run "$SYNTH" -- "$PROG" "$OUTDIR"
 
 mkdir -p "$WORKDIR"
 
-# 2. Analyse all design files + testbench into an isolated work library
-ghdl -a --std=08 --workdir="$WORKDIR" \
-    "$OUTDIR/cpu.vhd" \
-    "$OUTDIR/uart0.vhd" \
-    "$OUTDIR/timer0.vhd" \
-    "$OUTDIR/gpio0.vhd" \
-    "$OUTDIR/gpiot.vhd" \
-    "$OUTDIR/ramp0.vhd" \
-    "$OUTDIR/ram0.vhd" \
-    "$OUTDIR/coderom.vhd" \
-    "$OUTDIR/avr_soc.vhd" \
-    "$TB_VHD"
+# 2. Analyse every synthesised design file + the testbench into an isolated work
+#    library.  ghdl resolves direct entity instantiations at analysis time, so a
+#    sub-entity must be analysed before the top entity that instantiates it:
+#    analyse all sub-entities first (they are leaves, order among them is free),
+#    then avr_soc, then the testbench.  Globbing means the list need not track
+#    entity names (they depend on the SoC — e.g. inlined vs. sub-entity gpio).
+SUBS=$(ls "$OUTDIR"/*.vhd | grep -v '/avr_soc\.vhd$')
+ghdl -a --std=08 --workdir="$WORKDIR" $SUBS "$OUTDIR/avr_soc.vhd" "$TB_VHD"
 
 # 3. Elaborate
 ghdl -e --std=08 --workdir="$WORKDIR" "$TB_ENTITY"

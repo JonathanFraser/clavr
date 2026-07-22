@@ -1,10 +1,14 @@
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE DataKinds        #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveGeneric    #-}
+{-# LANGUAGE DeriveAnyClass   #-}
 -- | AVR SoC description — program ROM contents, peripheral wiring, memory map.
 --
 -- Memory map (data bus):
 --   0x0040 – 0x0042   UART  (UDR / USR / UBRR)
 --   0x0050 – 0x0052   Timer (TCCR / TCNT / OCR)
---   0x0060 – 0x0062   GPIO Port A (PIN / DDR / PORT)
+--   0x0060 – 0x0062   GPIO (PIN / DDR / PORT)
 --   0x0070 – 0x0072   Ramp  (SETPOINT / STEP / CURRENT, signed datapath)
 --   0x0200 – 0x09FF   2 KB SRAM
 --
@@ -22,17 +26,19 @@ module Main where
 import Prelude
 import System.Environment (getArgs)
 import System.Directory (createDirectoryIfMissing)
-import qualified Data.ByteString as BS
-import Data.Bits (shiftL, (.|.))
 
-import Hdl.Types
+import GHC.Generics (Generic)
+
+import Hdl.Sig
 import Hdl.Net (DomId(..), ClockEdge(..), ResetPolarity(..))
+import Hdl.Types (Named)
 import Hdl.Prim (Unsigned)
 import Hdl.Emit.Vhdl
 import Isacle.System.SystemDSL
 import Isacle.System.HdlCircuit (GpioPhys(..), UartPhys(..))
 
 import AVR.ISA (avrChip)
+import AVR.Program (readAvrProgram)
 
 -- ---------------------------------------------------------------------------
 -- Clock domain
@@ -43,38 +49,37 @@ instance KnownDom Dom10MHz where
     domId _ = DomId "dom10mhz" 10000000 Rising ActiveHigh "rst"
 
 -- ---------------------------------------------------------------------------
--- Runtime binary loading
--- ---------------------------------------------------------------------------
-
-readBin16LE :: FilePath -> IO [Integer]
-readBin16LE path = do
-    bytes <- BS.unpack <$> BS.readFile path
-    let words16 = parseLE bytes
-        n       = length words16
-        n'      = nextPow2 (max 1 n)
-    return (words16 ++ replicate (n' - n) 0)
-  where
-    parseLE []        = []
-    parseLE [_]       = []
-    parseLE (lo:hi:t) = ((fromIntegral hi `shiftL` 8) .|. fromIntegral lo)
-                        : parseLE t
-    nextPow2 k
-        | k <= 1    = 1
-        | otherwise = 2 * nextPow2 ((k + 1) `div` 2)
-
--- ---------------------------------------------------------------------------
 -- SoC description (ROM contents passed in at synthesis time)
 -- ---------------------------------------------------------------------------
 
-avrSocWith :: [Integer] -> SysDSL ()
-avrSocWith romWords = do
-    -- Top-level inputs: UART RX line and GPIO Port A pin inputs.
-    uartRx  <- sysInput "uart_rx"  :: SysDSL (Sig Dom10MHz Bool)
-    gpioAIn <- sysInput "gpio_a_in" :: SysDSL (Sig Dom10MHz (Unsigned 8))
+-- | Top-level __input__ pins of the SoC: the UART RX line and the GPIO's 8 pin
+-- inputs.  A plain record whose field names /are/ the pin names (that is all
+-- @deriving Named@ means for an entity bundle).  The entity flow
+-- ('Hdl.Entity.elaborateTop', via 'execSystemDSL') allocates one @NInput@ per
+-- field and hands the record to 'avrSocWith' — no @sysInput@ needed.
+data AvrIn = AvrIn
+    { uart_rx :: Sig Dom10MHz Bool
+    , gpio_in :: Sig Dom10MHz (Unsigned 8)
+    } deriving (Generic, Named)
 
+-- | Top-level __output__ pins: the GPIO's driven value + direction, and the
+-- test GPIO's PORT.  Returned from 'avrSocWith'; the entity flow drives one
+-- @NOutput@ per field — no @sysOutput@ needed.
+data AvrOut = AvrOut
+    { gpio_port  :: Sig Dom10MHz (Unsigned 8)
+    , gpio_ddr   :: Sig Dom10MHz (Unsigned 8)
+    , gpiot_port :: Sig Dom10MHz (Unsigned 8)
+    } deriving (Generic, Named)
+
+-- | The SoC is a top-level __entity__: @'AvrIn' -> m 'AvrOut'@.  Written against
+-- the abstract 'SysDSL' surface (any interpreter @m@), so the description carries
+-- no @NetM@/@Sig@-backend detail — only the system logic.  Top-level pins live in
+-- the 'AvrIn'/'AvrOut' records and are bound by the ordinary entity-elaboration path.
+avrSocWith :: SysDSL m => [Integer] -> AvrIn -> m AvrOut
+avrSocWith romWords AvrIn{ uart_rx = uartRx, gpio_in = gpioIn } = do
     uart0  <- createUart  "uart0"  uartRx
     timer0 <- createTimer "timer0" sigFalse
-    gpio0  <- createGpio  "gpio0"  gpioAIn
+    gpio0  <- createGpio  "gpio"   gpioIn
     -- Bit-addressable test GPIO mapped into the SBI/CBI/SBIC/SBIS I/O window
     -- (data 0x20–0x22 → I/O 0x00–0x02): its PORT (data 0x22 = I/O 0x02) is the
     -- only bit-addressable register a program can reach with SBI/CBI/SBIC/SBIS,
@@ -86,8 +91,10 @@ avrSocWith romWords = do
 
     -- Assemble the data bus (peripherals laid out into an address map), then hand
     -- the resulting peripheral handle to the CPU — the CPU generates the matching
-    -- (SimpleBus) master logic for it.
-    (dataBus, (uartOut, gpioOut, gpiotOut)) <- createBus @SimpleBus "databus" $ do
+    -- (SimpleBus) master logic for it.  Each 'attachPeripheral' returns the
+    -- peripheral's physical outputs; the bus block hands back the ones this SoC
+    -- exposes as pins (below, via 'AvrOut').
+    (dataBus, (uartOut, gpioOut, gpiotOut)) <- createBus @_ @SimpleBus "databus" $ do
         uartOut'  <- attachPeripheral 0x0040 uart0
         _         <- attachPeripheral 0x0050 timer0
         gpioOut'  <- attachPeripheral 0x0060 gpio0
@@ -100,7 +107,7 @@ avrSocWith romWords = do
     -- code space, 2^16 words) assembled into its own bus, handed to the CPU
     -- alongside the data bus.
     coderom <- createRom 65536 (RomImage romWords :: RomImage (Unsigned 16)) "coderom"
-    (codeBus, ()) <- createBus @SimpleBus "codebus" $ do
+    (codeBus, ()) <- createBus @_ @SimpleBus "codebus" $ do
         _ <- attachPeripheral 0x0 coderom
         return ()
 
@@ -113,9 +120,12 @@ avrSocWith romWords = do
 
     _ <- pure (uartRxIrq uartOut)   -- keep the UART rxIrq output referenced
 
-    sysOutput "gpio_port"  (gpioPort gpioOut)
-    sysOutput "gpio_ddr"   (gpioDdr  gpioOut)
-    sysOutput "gpiot_port" (gpioPort gpiotOut)
+    -- Top-level outputs: thread the peripheral physical outputs we expose as pins
+    -- into the 'AvrOut' record; the entity flow emits an NOutput per field.  The
+    -- UART/timer outputs are left internal (not exposed as pins) here.
+    pure AvrOut { gpio_port  = gpioPort gpioOut
+                , gpio_ddr   = gpioDdr  gpioOut
+                , gpiot_port = gpioPort gpiotOut }
 
 -- ---------------------------------------------------------------------------
 -- Main: emit VHDL
@@ -126,7 +136,7 @@ main = do
     args <- getArgs
     let progBin = case args of { (p:_)   -> p; _ -> "example/Example/program.bin" }
         outDir  = case args of { (_:o:_) -> o; _ -> "build/avr_soc" }
-    romWords <- readBin16LE progBin
+    romWords <- readAvrProgram progBin
     createDirectoryIfMissing True outDir
     let design = execSystemDSL "avr_soc" (avrSocWith romWords)
     emitVhdlDesignFiles outDir design
