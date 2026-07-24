@@ -16,8 +16,8 @@ use ieee.numeric_std.all;
 
 entity my_wb_slave is
     port (
-        dom10mhz : in  std_logic;
-        rst      : in  std_logic;
+        wb_clk_i : in  std_logic;
+        wb_rst_i : in  std_logic;
         wb_cyc_i : in  std_logic;
         wb_stb_i : in  std_logic;
         wb_we_i  : in  std_logic;
@@ -37,10 +37,10 @@ begin
     active <= wb_cyc_i and wb_stb_i;                 -- this slave is being accessed
     done   <= '1' when cnt >= WAITS else '0';        -- wait states elapsed
 
-    process (dom10mhz)
+    process (wb_clk_i)
     begin
-        if rising_edge(dom10mhz) then
-            if rst = '1' then
+        if rising_edge(wb_clk_i) then
+            if wb_rst_i = '1' then
                 cnt <= (others => '0');
             elsif active = '1' then
                 if done = '0' then

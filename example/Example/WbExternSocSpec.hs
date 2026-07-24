@@ -62,7 +62,9 @@ wbExternSoc romWords AvrIn{ gpio_in = gpioIn } = do
     -- block with extra I/O would simply add more fields here — the bus never sees
     -- them.
     resp <- externEntity "my_wb_slave"
-                WbSlaveIn { wb_cyc_i = wbmCyc wbm
+                WbSlaveIn { wb_clk_i = Clock              -- binds to Dom10MHz clock
+                          , wb_rst_i = Reset              -- binds to Dom10MHz reset
+                          , wb_cyc_i = wbmCyc wbm
                           , wb_stb_i = wbmStb wbm
                           , wb_we_i  = wbmWe  wbm
                           , wb_adr_i = wbmAdr wbm
