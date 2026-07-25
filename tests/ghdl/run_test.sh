@@ -17,9 +17,10 @@ PROG="$2"
 TB_VHD="$3"
 STOP_NS="$4"
 SYNTH="${5:-avr-soc-synth}"   # which SoC synth executable to run (default: coverage SoC)
+EXTRA_VHD="${6:-}"            # extra hand-written VHDL (e.g. an external Wishbone slave)
 
 if [ -z "$NAME" ] || [ -z "$PROG" ] || [ -z "$TB_VHD" ] || [ -z "$STOP_NS" ]; then
-    echo "Usage: run_test.sh <name> <prog.bin> <testbench.vhd> <stop-time-ns> [synth-exe]" >&2
+    echo "Usage: run_test.sh <name> <prog.bin> <testbench.vhd> <stop-time-ns> [synth-exe] [extra.vhd]" >&2
     exit 1
 fi
 
@@ -41,8 +42,10 @@ mkdir -p "$WORKDIR"
 #    analyse all sub-entities first (they are leaves, order among them is free),
 #    then avr_soc, then the testbench.  Globbing means the list need not track
 #    entity names (they depend on the SoC — e.g. inlined vs. sub-entity gpio).
+#    Any EXTRA_VHD (a hand-written entity instantiated by the design, e.g. an
+#    external Wishbone slave) is a leaf too and analysed alongside the sub-entities.
 SUBS=$(ls "$OUTDIR"/*.vhd | grep -v '/avr_soc\.vhd$')
-ghdl -a --std=08 --workdir="$WORKDIR" $SUBS "$OUTDIR/avr_soc.vhd" "$TB_VHD"
+ghdl -a --std=08 --workdir="$WORKDIR" $SUBS $EXTRA_VHD "$OUTDIR/avr_soc.vhd" "$TB_VHD"
 
 # 3. Elaborate
 ghdl -e --std=08 --workdir="$WORKDIR" "$TB_ENTITY"

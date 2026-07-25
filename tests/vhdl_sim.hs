@@ -214,13 +214,47 @@ tests =
         , tcStopNs   = 12000
         , tcExpected = [("gpio_port", "0x85"), ("gpio_ddr", "0x255")]
         }
+
+    -- Wishbone wait-state stall (uses the avr-wb-soc-synth SoC): the data bus is
+    -- a Wishbone (stalling) bus, and a wait-state slave on a nested Wishbone
+    -- sub-bus (bus-to-bus) holds a read for 5 cycles then returns 5.  The program
+    -- LDSes it into a register and drives GPIO PORT.  gpio_port = 5 proves the CPU
+    -- held through the bus stall; a CPU ignoring stall would read the early 0.
+    , TestCase
+        { tcName     = "test_wb_wait"
+        , tcProgBin  = "tests/fixtures/wb_wait.bin"
+        , tcTbVhd    = "tests/ghdl/wb_soc_tb.vhd"
+        , tcStopNs   = 2000
+        , tcExpected = [("gpio_port", "0x5"), ("gpio_ddr", "0x255")]
+        }
+
+    -- Hand-written Wishbone slave (uses avr-wb-extern-soc-synth + the
+    -- independently-authored tests/ghdl/my_wb_slave.vhd, dropped in via
+    -- externEntity + attachSlave): the slave inserts 4 Wishbone wait states then
+    -- acks with 0x3B.  gpio_port = 59 proves the AVR completed a classic
+    -- ACK-terminated transfer against an entity ISACLE did not generate.
+    , TestCase
+        { tcName     = "test_wb_extern"
+        , tcProgBin  = "tests/fixtures/wb_extern.bin"
+        , tcTbVhd    = "tests/ghdl/wb_extern_tb.vhd"
+        , tcStopNs   = 2000
+        , tcExpected = [("gpio_port", "0x59"), ("gpio_ddr", "0x255")]
+        }
     ]
 
 -- | Which SoC synth executable a case uses.  All but the interrupt case use the
 -- coverage SoC; @test_irq@ uses the interrupt-demo SoC (timer → createIrq → CPU).
 synthFor :: String -> String
-synthFor "test_irq" = "avr-irq-soc-synth"
-synthFor _          = "avr-soc-synth"
+synthFor "test_irq"       = "avr-irq-soc-synth"
+synthFor "test_wb_wait"   = "avr-wb-soc-synth"
+synthFor "test_wb_extern" = "avr-wb-extern-soc-synth"
+synthFor _                = "avr-soc-synth"
+
+-- | Extra hand-written VHDL a case's design instantiates but does not generate
+-- (e.g. an externally-authored Wishbone slave dropped in via 'externEntity').
+extraFor :: String -> String
+extraFor "test_wb_extern" = "tests/ghdl/my_wb_slave.vhd"
+extraFor _                = ""
 
 -- ---------------------------------------------------------------------------
 -- Runner
@@ -235,6 +269,7 @@ runTest tc = do
         , tcTbVhd tc
         , show (tcStopNs tc)
         , synthFor (tcName tc)
+        , extraFor (tcName tc)
         ] ""
     let combined = out ++ err
     let failures =
